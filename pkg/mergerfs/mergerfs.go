@@ -2,12 +2,18 @@ package mergerfs
 
 import (
 	"bytes"
+	"errors"
 	"path/filepath"
 	"strings"
 	"syscall"
 
 	"github.com/IceWhaleTech/CasaOS-Common/utils/logger"
 	"go.uber.org/zap"
+)
+
+const (
+	legacySourceKey = "user.mergerfs.srcmounts"
+	branchesKey     = "user.mergerfs.branches"
 )
 
 func ControlFile(fspath string) string {
@@ -46,21 +52,20 @@ func ListValues(fspath string) (map[string]string, error) {
 func SetSource(fspath string, sources []string) error {
 	ctrlfile := ControlFile(fspath)
 
-	key := "user.mergerfs.branches"
-
-	sourceMap := make(map[string]interface{})
-	for _, source := range sources {
-		sourceMap[source] = true
+	values, err := ListValues(fspath)
+	if err != nil {
+		return err
 	}
 
-	dedupedSources := make([]string, 0)
-	for source := range sourceMap {
-		dedupedSources = append(dedupedSources, source)
+	key, err := sourceKey(values)
+	if err != nil {
+		return err
 	}
 
+	dedupedSources := dedupeSources(sources)
 	value := []byte(strings.Join(dedupedSources, ":"))
 	//str, err := command.ExecResultStr("setfattr -n " + key + " -v " + string(string(value)) + " " + ctrlfile)
-	err := syscall.Setxattr(ctrlfile, key, value, 0)
+	err = syscall.Setxattr(ctrlfile, key, value, 0)
 	//logger.Error("SetSourceStr", zap.String("str", str))
 	if err != nil {
 		logger.Error("SetSource", zap.Error(err))
@@ -75,13 +80,27 @@ func GetSource(fspath string) ([]string, error) {
 		return nil, err
 	}
 
-	return strings.Split(values["user.mergerfs.srcmounts"], ":"), nil
+	key, err := sourceKey(values)
+	if err != nil {
+		return nil, err
+	}
+
+	return normalizeSources(values[key]), nil
 }
 
 func AddSource(fspath string, source string) error {
 	ctrlfile := ControlFile(fspath)
 
-	key := "user.mergerfs.branches"
+	values, err := ListValues(fspath)
+	if err != nil {
+		return err
+	}
+
+	key, err := sourceKey(values)
+	if err != nil {
+		return err
+	}
+
 	value := []byte("+" + source)
 
 	return syscall.Setxattr(ctrlfile, key, value, 0)
@@ -90,10 +109,62 @@ func AddSource(fspath string, source string) error {
 func RemoveSource(fspath string, source string) error {
 	ctrlfile := ControlFile(fspath)
 
-	key := "user.mergerfs.branches"
+	values, err := ListValues(fspath)
+	if err != nil {
+		return err
+	}
+
+	key, err := sourceKey(values)
+	if err != nil {
+		return err
+	}
+
 	value := []byte("-" + source)
 
 	return syscall.Setxattr(ctrlfile, key, value, 0)
+}
+
+func sourceKey(values map[string]string) (string, error) {
+	if _, ok := values[branchesKey]; ok {
+		return branchesKey, nil
+	}
+
+	if _, ok := values[legacySourceKey]; ok {
+		return legacySourceKey, nil
+	}
+
+	return "", errors.New("mergerfs source control xattr not found")
+}
+
+func normalizeSources(value string) []string {
+	if value == "" {
+		return []string{}
+	}
+
+	sources := strings.Split(value, ":")
+	for i, source := range sources {
+		for _, suffix := range []string{"=RW", "=RO", "=NC"} {
+			source = strings.TrimSuffix(source, suffix)
+		}
+		sources[i] = source
+	}
+
+	return sources
+}
+
+func dedupeSources(sources []string) []string {
+	deduped := make([]string, 0, len(sources))
+	seen := make(map[string]struct{}, len(sources))
+
+	for _, source := range sources {
+		if _, ok := seen[source]; ok {
+			continue
+		}
+		seen[source] = struct{}{}
+		deduped = append(deduped, source)
+	}
+
+	return deduped
 }
 
 func AddPath(fspath string, path string) error {
