@@ -3,60 +3,82 @@ name: goreleaser
 on:
   push:
     tags:
-      - v*.*.*
+      - "v*.*.*"
+  workflow_dispatch:
 
 permissions:
   contents: write
 
 jobs:
-  goreleaser:
+  release:
+    name: Build and publish LocalStorage packages
     runs-on: ubuntu-22.04
     steps:
-      - name: Install dependencies for cross-compiling
-        run: |
-          sudo apt update 
-          sudo apt-get --no-install-recommends --yes install \
-            upx libc6-dev-amd64-cross \
-            gcc-aarch64-linux-gnu libc6-dev-arm64-cross \
-            gcc-arm-linux-gnueabihf libc6-dev-armhf-cross
-      - name: Checkout
-        uses: actions/checkout@v3
+      - name: Checkout code
+        uses: actions/checkout@v4
         with:
           fetch-depth: 0
-      - name: Fetch all tags
-        run: git fetch --force --tags
-      - name: Get version
-        id: get_version
-        run: echo ::set-output name=VERSION::${GITHUB_REF/refs\/tags\//}
+
       - name: Set up Go
-        uses: actions/setup-go@v4
+        uses: actions/setup-go@v5
         with:
-          go-version: "1.20"
-      - name: Run GoReleaser
-        uses: goreleaser/goreleaser-action@v4
-        with:
-          # either 'goreleaser' (default) or 'goreleaser-pro'
-          distribution: goreleaser
-          #version: latest
-          version: 1.14.1
-          args: release --rm-dist
+          go-version-file: go.mod
+          cache: true
+
+      - name: Generate APIs and run tests
+        run: |
+          set -euo pipefail
+          go generate
+          go test ./...
+
+      - name: Build release packages
+        shell: bash
         env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          # Your GoReleaser Pro key, if you are using the 'goreleaser-pro' distribution
-          # GORELEASER_KEY: ${{ secrets.GORELEASER_KEY }}
-      - name: Upload to oss
-        id: upload_to_oss
-        uses: tvrcgo/upload-to-oss@master
+          RELEASE_TAG: ${{ github.ref_name }}
+        run: |
+          set -euo pipefail
+
+          output_dir=/tmp/casaos-local-storage-release
+          mkdir -p "$output_dir"
+
+          build_target() {
+            local target_arch="$1"
+            local goarch="$2"
+            local goarm="${3:-}"
+            local stage_dir
+            local output_file="$output_dir/linux-${target_arch}-casaos-local-storage-${RELEASE_TAG}.tar.gz"
+
+            stage_dir="$(mktemp -d)"
+            cp -a build "$stage_dir/"
+
+            CGO_ENABLED=0 \
+              GOOS=linux \
+              GOARCH="$goarch" \
+              GOARM="$goarm" \
+              go build \
+                -buildvcs=false \
+                -trimpath \
+                -tags "musl netgo osusergo" \
+                -ldflags "-s -w -X main.commit=${GITHUB_SHA} -X main.date=$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+                -o "$stage_dir/build/sysroot/usr/bin/casaos-local-storage" \
+                .
+
+            tar -C "$stage_dir" -czf "$output_file" build
+            rm -rf "$stage_dir"
+          }
+
+          build_target amd64 amd64
+          build_target arm64 arm64
+          build_target arm-7 arm 7
+          (cd "$output_dir" && sha256sum *.tar.gz > checksums.txt)
+
+      - name: Publish release assets
+        uses: softprops/action-gh-release@v2
         with:
-          key-id: ${{ secrets.OSS_KEY_ID }}
-          key-secret: ${{ secrets.OSS_KEY_SECRET }}
-          region: oss-cn-shanghai
-          bucket: casaos
-          assets: |
-            dist/checksums.txt:/IceWhaleTech/CasaOS-LocalStorage/releases/download/${{ steps.get_version.outputs.VERSION }}/checksums.txt
-            dist/linux-arm-7-casaos-local-storage-${{ steps.get_version.outputs.VERSION }}.tar.gz:/IceWhaleTech/CasaOS-LocalStorage/releases/download/${{ steps.get_version.outputs.VERSION }}/linux-arm-7-casaos-local-storage-${{ steps.get_version.outputs.VERSION }}.tar.gz
-            dist/linux-arm64-casaos-local-storage-${{ steps.get_version.outputs.VERSION }}.tar.gz:/IceWhaleTech/CasaOS-LocalStorage/releases/download/${{ steps.get_version.outputs.VERSION }}/linux-arm64-casaos-local-storage-${{ steps.get_version.outputs.VERSION }}.tar.gz
-            dist/linux-amd64-casaos-local-storage-${{ steps.get_version.outputs.VERSION }}.tar.gz:/IceWhaleTech/CasaOS-LocalStorage/releases/download/${{ steps.get_version.outputs.VERSION }}/linux-amd64-casaos-local-storage-${{ steps.get_version.outputs.VERSION }}.tar.gz
-            dist/linux-arm-7-casaos-local-storage-migration-tool-${{ steps.get_version.outputs.VERSION }}.tar.gz:/IceWhaleTech/CasaOS-LocalStorage/releases/download/${{ steps.get_version.outputs.VERSION }}/linux-arm-7-casaos-local-storage-migration-tool-${{ steps.get_version.outputs.VERSION }}.tar.gz
-            dist/linux-arm64-casaos-local-storage-migration-tool-${{ steps.get_version.outputs.VERSION }}.tar.gz:/IceWhaleTech/CasaOS-LocalStorage/releases/download/${{ steps.get_version.outputs.VERSION }}/linux-arm64-casaos-local-storage-migration-tool-${{ steps.get_version.outputs.VERSION }}.tar.gz
-            dist/linux-amd64-casaos-local-storage-migration-tool-${{ steps.get_version.outputs.VERSION }}.tar.gz:/IceWhaleTech/CasaOS-LocalStorage/releases/download/${{ steps.get_version.outputs.VERSION }}/linux-amd64-casaos-local-storage-migration-tool-${{ steps.get_version.outputs.VERSION }}.tar.gz
+          tag_name: ${{ github.ref_name }}
+          files: |
+            /tmp/casaos-local-storage-release/*.tar.gz
+            /tmp/casaos-local-storage-release/checksums.txt
+          draft: false
+          prerelease: false
+          fail_on_unmatched_files: true
