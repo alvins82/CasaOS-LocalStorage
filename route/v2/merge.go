@@ -1,14 +1,9 @@
 package v2
 
 import (
-	"fmt"
-
 	"net/http"
-	"os"
 	"strings"
 
-	"github.com/IceWhaleTech/CasaOS-Common/utils/constants"
-	"github.com/IceWhaleTech/CasaOS-Common/utils/file"
 	"github.com/IceWhaleTech/CasaOS-Common/utils/logger"
 	"github.com/IceWhaleTech/CasaOS-LocalStorage/codegen"
 	"github.com/IceWhaleTech/CasaOS-LocalStorage/common"
@@ -48,6 +43,40 @@ func (s *LocalStorage) SetMerge(ctx echo.Context) error {
 	if err := ctx.Bind(&m); err != nil {
 		message := err.Error()
 		return ctx.JSON(http.StatusBadRequest, codegen.ResponseBadRequest{Message: &message})
+	}
+
+	// An explicitly empty source list is the full-unmerge operation for the
+	// default data root. This is deliberately different from an omitted source
+	// list, which leaves the current source selection unchanged.
+	if isFullMergeRemoval(m) {
+		if err := service.MyService.LocalStorage().RemoveMerge(m.MountPoint); err != nil {
+			message := err.Error()
+			logger.Error("failed to remove merge", zap.Error(err), zap.String("mount point", m.MountPoint))
+			return ctx.JSON(http.StatusInternalServerError, codegen.BaseResponse{Message: &message})
+		}
+
+		config.ServerInfo.EnableMergerFS = "false"
+		if config.Cfg != nil {
+			config.Cfg.Section("server").Key("EnableMergerFS").SetValue("false")
+			if err := config.Cfg.SaveTo(config.LocalStorageConfigFilePath); err != nil {
+				message := err.Error()
+				logger.Error("failed to persist mergerfs disabled state", zap.Error(err))
+				return ctx.JSON(http.StatusInternalServerError, codegen.BaseResponse{Message: &message})
+			}
+		}
+
+		const messageStatus = common.ServiceName + ":merge_status"
+		msg := map[string]interface{}{
+			"mount_point":         m.MountPoint,
+			"source_base_path":    "",
+			"source_volume_uuids": []string{},
+		}
+		if err := service.MyService.Notify().SendNotify(messageStatus, msg); err != nil {
+			logger.Error("error when sending merge removal notification", zap.Error(err), zap.String("message path", messageStatus), zap.Any("message", msg))
+		}
+
+		message := "merge removed"
+		return ctx.JSON(http.StatusOK, codegen.SetMergeResponseOK{Message: &message})
 	}
 
 	// default to mergerfs if fstype is not specified
@@ -92,11 +121,10 @@ func (s *LocalStorage) SetMerge(ctx echo.Context) error {
 
 	if merge == nil {
 		merge = &model2.Merge{
-			FSType:         fstype,
-			MountPoint:     m.MountPoint,
-			SourceBasePath: m.SourceBasePath,
-			SourceVolumes:  sourceVolumes,
+			FSType:     fstype,
+			MountPoint: m.MountPoint,
 		}
+		applyMergeSources(merge, m.SourceBasePath, m.SourceVolumeUuids, sourceVolumes)
 
 		if err := service.MyService.LocalStorage().CreateMerge(merge); err != nil {
 
@@ -111,13 +139,7 @@ func (s *LocalStorage) SetMerge(ctx echo.Context) error {
 			return ctx.JSON(http.StatusInternalServerError, codegen.BaseResponse{Message: &message})
 		}
 	} else {
-		if m.SourceBasePath != nil {
-			merge.SourceBasePath = m.SourceBasePath
-		}
-
-		if m.SourceVolumeUuids != nil {
-			merge.SourceVolumes = sourceVolumes // which come from m.SourceVolumeUuids
-		}
+		applyMergeSources(merge, m.SourceBasePath, m.SourceVolumeUuids, sourceVolumes)
 
 		if err := service.MyService.LocalStorage().UpdateMerge(merge); err != nil {
 			message := err.Error()
@@ -130,6 +152,11 @@ func (s *LocalStorage) SetMerge(ctx echo.Context) error {
 			logger.Error("failed to update merge sources in database", zap.Error(err), zap.String("mount point", m.MountPoint))
 			return ctx.JSON(http.StatusInternalServerError, codegen.BaseResponse{Message: &message})
 		}
+	}
+	if err := enableMergerFSConfig(); err != nil {
+		message := err.Error()
+		logger.Error("failed to persist mergerfs enabled state", zap.Error(err))
+		return ctx.JSON(http.StatusInternalServerError, codegen.BaseResponse{Message: &message})
 	}
 	const messageStatus = common.ServiceName + ":merge_status"
 	result := MergeAdapterOut(*merge)
@@ -149,6 +176,42 @@ func (s *LocalStorage) SetMerge(ctx echo.Context) error {
 		Data: &result,
 	})
 }
+
+func applyMergeSources(merge *model2.Merge, sourceBasePath *string, sourceVolumeUuids *[]string, sourceVolumes []*model2.Volume) {
+	if sourceBasePath != nil {
+		if strings.TrimSpace(*sourceBasePath) == "" {
+			merge.SourceBasePath = nil
+		} else {
+			merge.SourceBasePath = sourceBasePath
+		}
+	} else if sourceVolumeUuids != nil {
+		// An explicit volume list represents the complete source selection. Do
+		// not retain the system-storage bootstrap path unless it is requested.
+		merge.SourceBasePath = nil
+	}
+
+	if sourceVolumeUuids != nil {
+		merge.SourceVolumes = sourceVolumes
+	}
+}
+
+func isFullMergeRemoval(merge codegen.Merge) bool {
+	if merge.MountPoint != common.DefaultMountPoint || merge.SourceVolumeUuids == nil || len(*merge.SourceVolumeUuids) != 0 {
+		return false
+	}
+	return merge.SourceBasePath == nil || strings.TrimSpace(*merge.SourceBasePath) == ""
+}
+
+func enableMergerFSConfig() error {
+	config.ServerInfo.EnableMergerFS = "true"
+	if config.Cfg == nil {
+		return nil
+	}
+
+	config.Cfg.Section("server").Key("EnableMergerFS").SetValue("true")
+	return config.Cfg.SaveTo(config.LocalStorageConfigFilePath)
+}
+
 func (s *LocalStorage) GetMergeInitStatus(ctx echo.Context) error {
 	status := codegen.Uninitialized
 	mountPoint := common.DefaultMountPoint
@@ -178,27 +241,8 @@ func (s *LocalStorage) InitMerge(ctx echo.Context) error {
 		return ctx.JSON(http.StatusBadRequest, codegen.ResponseBadRequest{Message: &message})
 	}
 	if strings.ToLower(config.ServerInfo.EnableMergerFS) != "true" {
-		if !file.CheckNotExist(m.MountPoint) {
-
-			dir, _ := os.ReadDir(constants.DefaultFilePath)
-			if len(dir) > 0 {
-				message := "Please make sure the /var/lib/casaos/files directory is empty"
-				return ctx.JSON(http.StatusBadRequest, codegen.ResponseBadRequest{Message: &message})
-			}
-
-			file.RMDir(constants.DefaultFilePath)
-
-			err := os.Rename(m.MountPoint, constants.DefaultFilePath)
-			if err != nil {
-				fmt.Println(err)
-				message := "move " + m.MountPoint + " to /var/lib/casaos/files failed"
-				return ctx.JSON(http.StatusBadRequest, codegen.ResponseBadRequest{Message: &message})
-			}
-		}
-		err := file.MkDir(m.MountPoint)
-		if err != nil {
-			fmt.Println(err)
-			message := "create " + m.MountPoint + " failed"
+		if err := service.MyService.LocalStorage().PrepareExternalDataRoot(m.MountPoint); err != nil {
+			message := err.Error()
 			return ctx.JSON(http.StatusBadRequest, codegen.ResponseBadRequest{Message: &message})
 		}
 
@@ -208,18 +252,9 @@ func (s *LocalStorage) InitMerge(ctx echo.Context) error {
 			return ctx.JSON(http.StatusBadRequest, codegen.ResponseBadRequest{Message: &message})
 		}
 
-		if !service.MyService.Disk().EnsureDefaultMergePoint() {
-			config.ServerInfo.EnableMergerFS = "false"
-			message := "default merge point is not empty"
-			return ctx.JSON(http.StatusBadRequest, codegen.ResponseBadRequest{Message: &message})
-		}
-
-		service.MyService.LocalStorage().CheckMergeMount()
-
-		config.Cfg.Section("server").Key("EnableMergerFS").SetValue("true")
-		config.ServerInfo.EnableMergerFS = "true"
-
-		config.Cfg.SaveTo(config.LocalStorageConfigFilePath)
+		// The actual mergerfs mount is created by SetMerge from the selected
+		// external volumes. Do not create the historical system-backed bootstrap
+		// merge here, otherwise the flash/system disk is briefly part of /DATA.
 	} else {
 		status := codegen.Initialized
 		return ctx.JSON(http.StatusOK, codegen.InitMergeResponseOK{Data: &status})

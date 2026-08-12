@@ -76,7 +76,10 @@ paths:
     post:
       summary: Set a merge
       description: |-
-        (TODO)
+        Updates the complete source selection for a merge. For the default
+        /DATA merge, sending an explicit empty source_volume_uuids array and
+        an empty source_base_path performs a full unmerge. External storage
+        contents are not deleted.
       operationId: setMerge
       tags:
         - Merge methods
@@ -107,7 +110,10 @@ paths:
     post:
       summary: Initialize a merge
       description: |-
-        (TODO)
+        Prepares /DATA for a merge by moving the existing system-data tree to
+        /var/lib/casaos/files. The mergerfs mount is created by Set a merge
+        using the selected source volumes; the system-data path is not added
+        as a mergerfs branch automatically.
       operationId: initMerge
       tags:
         - Merge methods
@@ -452,9 +458,17 @@ components:
           example: "/DATA"
         source_base_path:
           type: string
-          example: "/var/lib/casaos/files"
+          description: |-
+            Optional system-data source. Leave empty to keep the system-data
+            tree outside the mergerfs branches; CasaOS exposes its AppData
+            directory at /DATA/AppData with a compatibility bind mount.
+          example: ""
         source_volume_uuids:
           type: array
+          description: |-
+            Complete list of CasaOS storage UUIDs to use as mergerfs branches.
+            For /DATA, an explicit empty list together with an empty
+            source_base_path removes the merge.
           items:
             type: string
             example: 5c682e86-cec3-4761-9350-8e1a0c2d1ae9
