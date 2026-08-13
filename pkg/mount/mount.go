@@ -22,6 +22,15 @@ func Mount(source string, mountpoint string, fstype *string, options *string) er
 	return nil
 }
 
+// Bind mounts source at mountpoint without applying the filesystem-specific
+// validation used by the higher-level volume mount API. Bind targets are
+// intentionally allowed to contain files because the target is an existing
+// directory inside another mount (for example /DATA/AppData).
+func Bind(source string, mountpoint string) error {
+	options := "bind"
+	return Mount(source, mountpoint, nil, &options)
+}
+
 func UmountByMountPoint(mountpoint string) error {
 	if _, err := command.ExecuteCommand("umount", "--force", "--verbose", "--quiet", mountpoint); err != nil {
 		return err

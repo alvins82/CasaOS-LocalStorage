@@ -66,3 +66,14 @@ func (s *LocalStorageService) CreateMergeInDB(merge *model2.Merge) error {
 	}
 	return nil
 }
+
+func (s *LocalStorageService) DeleteMergeFromDB(merge *model2.Merge) error {
+	if merge == nil {
+		return nil
+	}
+
+	if err := s._db.Model(merge).Association(model2.MergeSourceVolumes).Clear(); err != nil {
+		return err
+	}
+	return s._db.Delete(merge).Error
+}

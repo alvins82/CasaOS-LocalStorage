@@ -21,6 +21,7 @@ var (
 	ErrMergeMountPointAlreadyExists  = errors.New("merge mount point already exists")
 	ErrMergeMountPointDoesNotExist   = errors.New("merge mount point does not exist")
 	ErrMergeMountPointSourceConflict = errors.New("source mount point should not be a child path of the merge mount point")
+	ErrMergeHasNoSources             = errors.New("a merge must have at least one source")
 	ErrNilReference                  = errors.New("reference is nil")
 )
 
@@ -76,11 +77,9 @@ func (s *LocalStorageService) GetMerges(mountPoint *string) ([]model2.Merge, err
 	if err != nil {
 		return nil, err
 	}
-
-	for _, merge := range mergesFromDB {
-		merge.SourceVolumes = excludeVolumesWithWrongMountPointAndUUID(merge.SourceVolumes)
-	}
-
+	// Keep configured-but-currently-missing volumes in the response so the UI
+	// can warn about them and preserve them for automatic reattachment. Runtime
+	// mount operations filter unavailable volumes below.
 	return mergesFromDB, nil
 }
 
@@ -94,12 +93,17 @@ func (s *LocalStorageService) CreateMerge(merge *model2.Merge) error {
 		return err
 	}
 
-	merge.SourceVolumes = excludeVolumesWithWrongMountPointAndUUID(merge.SourceVolumes)
+	mountedSourceVolumes := excludeVolumesWithWrongMountPointAndUUID(merge.SourceVolumes)
+	mountMerge := *merge
+	mountMerge.SourceVolumes = mountedSourceVolumes
 
-	sources, err := buildSources(merge)
+	sources, err := buildSources(&mountMerge)
 	if err != nil {
 		logger.Error("failed to build sources", zap.Error(err))
 		return err
+	}
+	if len(sources) == 0 {
+		return ErrMergeHasNoSources
 	}
 
 	// check if the mount point is empty before creating a new mergerfs mount
@@ -121,6 +125,13 @@ func (s *LocalStorageService) CreateMerge(merge *model2.Merge) error {
 		logger.Error("failed to mount mergerfs", zap.Error(err), zap.String("mountPoint", merge.MountPoint), zap.String("source", source))
 		return err
 	}
+	if err := s.ensureAppDataCompatibilityMount(merge); err != nil {
+		logger.Error("failed to expose system AppData at /DATA/AppData", zap.Error(err), zap.String("mountPoint", merge.MountPoint))
+		if unmountErr := s.Umount(merge.MountPoint); unmountErr != nil && !errors.Is(unmountErr, ErrNotMounted) {
+			logger.Error("failed to roll back mergerfs mount after AppData setup failure", zap.Error(unmountErr), zap.String("mountPoint", merge.MountPoint))
+		}
+		return err
+	}
 
 	return nil
 }
@@ -135,12 +146,17 @@ func (s *LocalStorageService) UpdateMerge(merge *model2.Merge) error {
 		return ErrMergeMountPointDoesNotExist
 	}
 
-	merge.SourceVolumes = excludeVolumesWithWrongMountPointAndUUID(merge.SourceVolumes)
+	mountedSourceVolumes := excludeVolumesWithWrongMountPointAndUUID(merge.SourceVolumes)
+	mountMerge := *merge
+	mountMerge.SourceVolumes = mountedSourceVolumes
 
-	sources, err := buildSources(merge)
+	sources, err := buildSources(&mountMerge)
 	if err != nil {
 		logger.Error("failed to build sources", zap.Error(err))
 		return err
+	}
+	if len(sources) == 0 {
+		return ErrMergeHasNoSources
 	}
 
 	// if it is already a merge point, check if the mount point is a mergerfs mount with the same sources
@@ -150,12 +166,22 @@ func (s *LocalStorageService) UpdateMerge(merge *model2.Merge) error {
 		return err
 	}
 
-	if !utils.CompareStringSlices(sources, existingSources) {
+	sourcesChanged := !utils.CompareStringSlices(sources, existingSources)
+	if sourcesChanged {
 		// update the mergerfs sources if different sources
 		if err := mergerfs.SetSource(merge.MountPoint, sources); err != nil {
 			logger.Error("failed to set mergerfs sources", zap.Error(err), zap.String("mountPoint", merge.MountPoint), zap.Any("sources", sources))
 			return err
 		}
+	}
+	if err := s.ensureAppDataCompatibilityMount(merge); err != nil {
+		logger.Error("failed to expose system AppData at /DATA/AppData", zap.Error(err), zap.String("mountPoint", merge.MountPoint))
+		if sourcesChanged {
+			if rollbackErr := mergerfs.SetSource(merge.MountPoint, existingSources); rollbackErr != nil {
+				logger.Error("failed to roll back mergerfs sources after AppData setup failure", zap.Error(rollbackErr), zap.String("mountPoint", merge.MountPoint))
+			}
+		}
+		return err
 	}
 
 	return nil
