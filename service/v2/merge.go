@@ -8,6 +8,7 @@ import (
 	"github.com/IceWhaleTech/CasaOS-Common/utils/file"
 	"github.com/IceWhaleTech/CasaOS-Common/utils/logger"
 	"github.com/IceWhaleTech/CasaOS-LocalStorage/codegen"
+	"github.com/IceWhaleTech/CasaOS-LocalStorage/common"
 	"github.com/IceWhaleTech/CasaOS-LocalStorage/pkg/mergerfs"
 	"github.com/IceWhaleTech/CasaOS-LocalStorage/pkg/partition"
 	"github.com/IceWhaleTech/CasaOS-LocalStorage/pkg/utils/command"
@@ -132,6 +133,20 @@ func (s *LocalStorageService) CreateMerge(merge *model2.Merge) error {
 		}
 		return err
 	}
+	if merge.MountPoint == common.DefaultMountPoint {
+		if err := EnsureDefaultDirectories(merge.MountPoint); err != nil {
+			logger.Error("failed to create default data directories", zap.Error(err), zap.String("mountPoint", merge.MountPoint))
+			if usesExternalDataBranches(merge) {
+				if unmountErr := s.unmountAppDataCompatibilityMount(); unmountErr != nil {
+					logger.Error("failed to roll back AppData compatibility mount", zap.Error(unmountErr), zap.String("mountPoint", merge.MountPoint))
+				}
+			}
+			if unmountErr := s.Umount(merge.MountPoint); unmountErr != nil && !errors.Is(unmountErr, ErrNotMounted) {
+				logger.Error("failed to roll back mergerfs mount after default directory setup failure", zap.Error(unmountErr), zap.String("mountPoint", merge.MountPoint))
+			}
+			return err
+		}
+	}
 
 	return nil
 }
@@ -182,6 +197,17 @@ func (s *LocalStorageService) UpdateMerge(merge *model2.Merge) error {
 			}
 		}
 		return err
+	}
+	if merge.MountPoint == common.DefaultMountPoint {
+		if err := EnsureDefaultDirectories(merge.MountPoint); err != nil {
+			logger.Error("failed to create default data directories", zap.Error(err), zap.String("mountPoint", merge.MountPoint))
+			if sourcesChanged {
+				if rollbackErr := mergerfs.SetSource(merge.MountPoint, existingSources); rollbackErr != nil {
+					logger.Error("failed to roll back mergerfs sources after default directory setup failure", zap.Error(rollbackErr), zap.String("mountPoint", merge.MountPoint))
+				}
+			}
+			return err
+		}
 	}
 
 	return nil
