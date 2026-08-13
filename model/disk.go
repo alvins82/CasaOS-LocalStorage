@@ -76,12 +76,14 @@ type USBDriveStatus struct {
 	Size     uint64        `json:"size"`
 	Model    string        `json:"model"`
 	Avail    uint64        `json:"avail"`
+	Used     uint64        `json:"used"`
 	Children []USBChildren `json:"children"`
 }
 type USBChildren struct {
 	Name       string `json:"name"`
 	Size       uint64 `json:"size"`
 	Avail      uint64 `json:"avail"`
+	Used       uint64 `json:"used"`
 	MountPoint string `json:"mount_point"`
 }
 
@@ -98,11 +100,12 @@ type Storage struct {
 	PersistedIn string `json:"persisted_in"` // none, fstab, casaos
 }
 type Storages struct {
-	DiskName string    `json:"disk_name"`
-	Size     uint64    `json:"size"`
-	Path     string    `json:"path"`
-	Children []Storage `json:"children"`
-	Type     string    `json:"type"`
+	DiskName  string    `json:"disk_name"`
+	DiskModel string    `json:"disk_model"`
+	Size      uint64    `json:"size"`
+	Path      string    `json:"path"`
+	Children  []Storage `json:"children"`
+	Type      string    `json:"type"`
 }
 
 type DiskStatus struct {

@@ -53,10 +53,11 @@ func GetStorageList(ctx echo.Context) error {
 		tempSystemDisk := false
 		children := 1
 		tempDisk := model1.Storages{
-			DiskName: currentDisk.Model,
-			Path:     currentDisk.Path,
-			Size:     currentDisk.Size,
-			Type:     currentDisk.Tran,
+			DiskName:  currentDisk.Model,
+			DiskModel: currentDisk.Model,
+			Path:      currentDisk.Path,
+			Size:      currentDisk.Size,
+			Type:      currentDisk.Tran,
 		}
 
 		storageArr := []model1.Storage{}
@@ -64,10 +65,11 @@ func GetStorageList(ctx echo.Context) error {
 		if reflect.DeepEqual(temp, model1.SmartctlA{}) {
 			temp.SmartStatus.Passed = true
 		}
-		if len(currentDisk.Children) == 0 && service.IsDiskSupported(currentDisk) {
-			currentDisk.Children = append(currentDisk.Children, currentDisk)
+		mountedFilesystems := service.MountedFilesystems(currentDisk)
+		if len(mountedFilesystems) == 0 && len(currentDisk.Children) == 0 && service.IsDiskSupported(currentDisk) {
+			mountedFilesystems = append(mountedFilesystems, currentDisk)
 		}
-		for _, blkChild := range currentDisk.Children {
+		for _, blkChild := range mountedFilesystems {
 			if err == nil {
 				if blkChild.Path == df.FileSystem {
 					tempDisk.DiskName = "System"

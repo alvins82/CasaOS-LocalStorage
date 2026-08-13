@@ -603,24 +603,18 @@ func (d *diskService) GetUSBDriveStatusList() []model.USBDriveStatus {
 			continue
 		}
 
-		isMount := false
-		status := model.USBDriveStatus{Model: v.Model, Name: v.Name, Size: v.Size}
-		for _, child := range v.Children {
-			if len(child.MountPoint) > 0 {
-				isMount = true
-				avail, _ := strconv.ParseUint(child.FSAvail.String(), 10, 64)
-				status.Avail += avail
-			}
-		}
-		if !isMount && len(v.MountPoint) > 0 {
-			isMount = true
-			avail, _ := strconv.ParseUint(v.FSAvail.String(), 10, 64)
-			status.Avail += avail
+		stats := MountedFilesystemStats(v)
+		if stats.MountCount == 0 {
+			continue
 		}
 
-		if isMount {
-			statusList = append(statusList, status)
-		}
+		statusList = append(statusList, model.USBDriveStatus{
+			Model: v.Model,
+			Name:  v.Name,
+			Size:  v.Size,
+			Avail: stats.Avail,
+			Used:  stats.Used,
+		})
 	}
 	return statusList
 }
@@ -778,6 +772,104 @@ func IsFormatSupported(d model.LSBLKModel) bool {
 		return true
 	}
 	return false
+}
+
+// FilesystemStats contains the space reported by mounted filesystems below a
+// block-device node. A filesystem may be nested several levels down (for
+// example: disk -> partition -> LVM -> logical volume), so callers must not
+// only inspect the node's immediate children.
+type FilesystemStats struct {
+	Size       uint64
+	Avail      uint64
+	Used       uint64
+	MountCount int
+}
+
+// MountedFilesystemStats recursively aggregates mounted filesystem values
+// from an lsblk tree. FSUsed is used for Used instead of Size-Avail because
+// the latter includes filesystem-reserved space and unallocated partitions.
+func MountedFilesystemStats(rootBlk model.LSBLKModel) FilesystemStats {
+	stats := FilesystemStats{}
+
+	for _, blk := range MountedFilesystems(rootBlk) {
+		mounted, ok := parseFilesystemStats(blk)
+		if !ok {
+			continue
+		}
+		stats.Size += mounted.Size
+		stats.Avail += mounted.Avail
+		stats.Used += mounted.Used
+		stats.MountCount++
+	}
+	return stats
+}
+
+// MountedFilesystems returns every mounted filesystem below a block-device
+// node, including filesystems nested under partitions, LVM, and other device
+// mapper nodes. The returned values retain their mount paths and metadata for
+// storage-manager API responses.
+func MountedFilesystems(rootBlk model.LSBLKModel) []model.LSBLKModel {
+	filesystems := make([]model.LSBLKModel, 0)
+
+	var walk func(model.LSBLKModel)
+	walk = func(blk model.LSBLKModel) {
+		if blk.MountPoint != "" {
+			filesystems = append(filesystems, blk)
+		}
+
+		for _, child := range blk.Children {
+			walk(child)
+		}
+	}
+
+	walk(rootBlk)
+	return filesystems
+}
+
+// MountedFilesystemStatsAt returns the space for a specific mount point in
+// an lsblk tree. This is used for the dashboard's system-storage card, which
+// should represent / rather than /boot or a partition allocated to LVM.
+func MountedFilesystemStatsAt(rootBlk model.LSBLKModel, mountPoint string) (FilesystemStats, bool) {
+	blk := WalkDisk(rootBlk, 5, func(blk model.LSBLKModel) bool {
+		return blk.MountPoint == mountPoint
+	})
+	if blk == nil {
+		return FilesystemStats{}, false
+	}
+
+	stats, ok := parseFilesystemStats(*blk)
+	if !ok {
+		return FilesystemStats{}, false
+	}
+	stats.MountCount = 1
+	return stats, true
+}
+
+func parseFilesystemStats(blk model.LSBLKModel) (FilesystemStats, bool) {
+	size, sizeOK := parseLSBLKUint(blk.FSSize)
+	avail, availOK := parseLSBLKUint(blk.FSAvail)
+	if !sizeOK || !availOK || avail > size {
+		return FilesystemStats{}, false
+	}
+
+	used, usedOK := parseLSBLKUint(blk.FSUsed)
+	if !usedOK {
+		used = size - avail
+	}
+
+	return FilesystemStats{Size: size, Avail: avail, Used: used}, true
+}
+
+func parseLSBLKUint(value json.Number) (uint64, bool) {
+	if value == "" || value == "null" {
+		return 0, false
+	}
+
+	parsed, err := strconv.ParseUint(value.String(), 10, 64)
+	if err != nil {
+		return 0, false
+	}
+	return parsed, true
 }
 
 func WalkDisk(rootBlk model.LSBLKModel, depth uint, shouldStopAt func(blk model.LSBLKModel) bool) *model.LSBLKModel {
