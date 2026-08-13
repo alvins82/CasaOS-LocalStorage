@@ -4,7 +4,6 @@ import (
 	"context"
 	"net/http"
 	"reflect"
-	"strconv"
 	"strings"
 	"time"
 
@@ -21,25 +20,9 @@ func sendDiskBySocket() {
 
 	status := model.DiskStatus{}
 	healthy := true
-
-	//var systemDisk *model.LSBLKModel
+	systemDiskFound := false
 
 	for _, currentDisk := range blkList {
-
-		// if systemDisk == nil {
-		// 	// go 5 level deep to look for system block device by mount point being "/"
-		// 	systemDisk = service.WalkDisk(currentDisk, 5, func(blk model.LSBLKModel) bool { return blk.MountPoint == "/" })
-
-		// 	if systemDisk != nil {
-		// 		s, _ := strconv.ParseUint(systemDisk.FSSize.String(), 10, 64)
-		// 		a, _ := strconv.ParseUint(systemDisk.FSAvail.String(), 10, 64)
-		// 		u, _ := strconv.ParseUint(systemDisk.FSUsed.String(), 10, 64)
-		// 		status.Size += s
-		// 		status.Avail += a
-		// 		status.Used += u
-		//		continue
-		// 	}
-		// }
 		if !service.IsDiskSupported(currentDisk) {
 			continue
 		}
@@ -53,26 +36,29 @@ func sendDiskBySocket() {
 				healthy = true
 			}
 		}
-		if len(currentDisk.Children) > 0 {
-			for _, v := range currentDisk.Children {
-				if len(v.MountPoint) > 0 {
-					s, _ := strconv.ParseUint(v.FSSize.String(), 10, 64)
-					a, _ := strconv.ParseUint(v.FSAvail.String(), 10, 64)
-					u, _ := strconv.ParseUint(v.FSUsed.String(), 10, 64)
-					status.Size += s
-					status.Avail += a
-					status.Used += u
-				}
+
+		if !systemDiskFound {
+			if systemStats, ok := service.MountedFilesystemStatsAt(currentDisk, "/"); ok {
+				status.Size = systemStats.Size
+				status.Avail = systemStats.Avail
+				status.Used = systemStats.Used
+				systemDiskFound = true
 			}
-		} else {
-			if len(currentDisk.MountPoint) > 0 {
-				s, _ := strconv.ParseUint(currentDisk.FSSize.String(), 10, 64)
-				a, _ := strconv.ParseUint(currentDisk.FSAvail.String(), 10, 64)
-				u, _ := strconv.ParseUint(currentDisk.FSUsed.String(), 10, 64)
-				status.Size += s
-				status.Avail += a
-				status.Used += u
+		}
+	}
+
+	// Keep a useful fallback for systems where lsblk cannot identify "/".
+	// This still aggregates mounted filesystems recursively, without treating
+	// a partition or LVM container as consumed file space.
+	if !systemDiskFound {
+		for _, currentDisk := range blkList {
+			if !service.IsDiskSupported(currentDisk) {
+				continue
 			}
+			stats := service.MountedFilesystemStats(currentDisk)
+			status.Size += stats.Size
+			status.Avail += stats.Avail
+			status.Used += stats.Used
 		}
 	}
 
