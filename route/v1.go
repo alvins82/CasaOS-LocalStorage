@@ -73,6 +73,7 @@ func InitV1Router() http.Handler {
 			v1StorageGroup.POST("", v1.PostAddStorage)
 
 			v1StorageGroup.PUT("", v1.PutFormatStorage)
+			v1StorageGroup.PUT("/rename", v1.PutRenameStorage)
 
 			v1StorageGroup.DELETE("", v1.DeleteStorage)
 			v1StorageGroup.GET("", v1.GetStorageList)

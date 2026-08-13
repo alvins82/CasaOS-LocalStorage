@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"os/exec"
+	"strings"
 	"time"
 
 	exec2 "github.com/IceWhaleTech/CasaOS-Common/utils/exec"
@@ -49,6 +50,17 @@ func ExecLSBLK() []byte {
 		return nil
 	}
 	return output
+}
+
+// ExecFilesystemLabel reads the label directly from the filesystem. This is
+// useful immediately after a label change, before the udev database used by
+// lsblk has caught up.
+func ExecFilesystemLabel(path string) string {
+	output, err := exec2.Command("blkid", "-o", "value", "-s", "LABEL", path).Output()
+	if err != nil {
+		return ""
+	}
+	return strings.TrimSpace(string(output))
 }
 
 func ExecuteCommand(name string, arg ...string) ([]byte, error) {

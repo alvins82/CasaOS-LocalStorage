@@ -13,6 +13,8 @@ import (
 	"net/http"
 	"path/filepath"
 	"reflect"
+	"regexp"
+	"strings"
 	"time"
 
 	"github.com/IceWhaleTech/CasaOS-Common/model"
@@ -26,6 +28,10 @@ import (
 
 	"github.com/IceWhaleTech/CasaOS-LocalStorage/service"
 )
+
+const storageLabelMaxLength = 16
+
+var storageLabelPattern = regexp.MustCompile(`^[A-Za-z0-9_]+$`)
 
 func GetStorageList(ctx echo.Context) error {
 	system := ctx.QueryParam("system")
@@ -108,7 +114,11 @@ func GetStorageList(ctx echo.Context) error {
 				DriveName:   blkChild.Name,
 				PersistedIn: service.MyService.Disk().GetPersistentTypeByUUID(blkChild.UUID),
 			}
-			if len(blkChild.Label) == 0 {
+			label := blkChild.Label
+			if len(label) == 0 && len(blkChild.Path) > 0 {
+				label = service.MyService.Disk().GetFilesystemLabel(blkChild.Path)
+			}
+			if len(label) == 0 {
 				if stor.MountPoint == "/" {
 					stor.Label = "System"
 				} else {
@@ -117,7 +127,7 @@ func GetStorageList(ctx echo.Context) error {
 
 				children++
 			} else {
-				stor.Label = blkChild.Label
+				stor.Label = label
 			}
 			// if _, ok := mapdb[stor.MountPoint]; ok || stor.Label == "System" {
 			storageArr = append(storageArr, stor)
@@ -357,6 +367,44 @@ func PutFormatStorage(ctx echo.Context) error {
 		return ctx.JSON(http.StatusInternalServerError, model.Result{Success: common_err.SERVICE_ERROR, Message: err.Error()})
 	}
 
+	return ctx.JSON(common_err.SUCCESS, model.Result{Success: common_err.SUCCESS, Message: common_err.GetMsg(common_err.SUCCESS)})
+}
+
+// PutRenameStorage changes the filesystem label used by CasaOS as the storage
+// name. It deliberately does not alter the filesystem contents or mount point.
+func PutRenameStorage(ctx echo.Context) error {
+	var request struct {
+		Path string `json:"path"`
+		Name string `json:"name"`
+	}
+
+	if err := ctx.Bind(&request); err != nil {
+		return ctx.JSON(http.StatusBadRequest, model.Result{Success: common_err.INVALID_PARAMS, Message: common_err.GetMsg(common_err.INVALID_PARAMS), Data: err.Error()})
+	}
+
+	request.Path = filepath.Clean(strings.TrimSpace(request.Path))
+	request.Name = strings.TrimSpace(request.Name)
+	if request.Path == "." || !strings.HasPrefix(request.Path, "/dev/") ||
+		!storageLabelPattern.MatchString(request.Name) || len(request.Name) > storageLabelMaxLength {
+		return ctx.JSON(http.StatusBadRequest, model.Result{Success: common_err.INVALID_PARAMS, Message: "Storage name must contain only letters, numbers, or underscores and be 16 characters or fewer"})
+	}
+
+	diskInfo := service.MyService.Disk().GetDiskInfo(request.Path)
+	fsType := strings.ToLower(diskInfo.FsType)
+	if fsType != "ext2" && fsType != "ext3" && fsType != "ext4" {
+		return ctx.JSON(http.StatusBadRequest, model.Result{Success: common_err.INVALID_PARAMS, Message: "Only ext2, ext3, and ext4 storage can be renamed"})
+	}
+
+	if diskInfo.MountPoint == "/" || diskInfo.MountPoint == "/boot" ||
+		diskInfo.MountPoint == "/boot/efi" || strings.HasPrefix(diskInfo.MountPoint, "/boot/") {
+		return ctx.JSON(http.StatusBadRequest, model.Result{Success: common_err.INVALID_PARAMS, Message: "System storage cannot be renamed"})
+	}
+
+	if err := service.MyService.Disk().RenameStorage(request.Path, request.Name); err != nil {
+		return ctx.JSON(http.StatusInternalServerError, model.Result{Success: common_err.SERVICE_ERROR, Message: err.Error()})
+	}
+
+	service.MyService.Disk().RemoveLSBLKCache()
 	return ctx.JSON(common_err.SUCCESS, model.Result{Success: common_err.SUCCESS, Message: common_err.GetMsg(common_err.SUCCESS)})
 }
 
