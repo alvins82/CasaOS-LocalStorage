@@ -41,10 +41,12 @@ type DiskService interface {
 	CheckSerialDiskMount()
 	FormatDisk(path string) error
 	GetDiskInfo(path string) model.LSBLKModel
+	GetFilesystemLabel(path string) string
 	GetPersistentTypeByUUID(uuid string) string
 	GetUSBDriveStatusList() []model.USBDriveStatus
 	LSBLK(isUseCache bool) []model.LSBLKModel
 	MountDisk(path, volume string) (string, error)
+	RenameStorage(path, name string) error
 	RemoveLSBLKCache()
 	SmartCTL(path string) model.SmartctlA
 	UmountPointAndRemoveDir(m model.LSBLKModel) error
@@ -168,6 +170,17 @@ func (d *diskService) FormatDisk(path string) error {
 	logger.Info("formatting partition...", zap.String("path", path))
 	if err := partition.FormatPartition(path); err != nil {
 		logger.Error("failed to format partition", zap.Error(err), zap.String("path", path))
+		return err
+	}
+
+	return nil
+}
+
+// RenameStorage updates the filesystem label without changing any filesystem
+// contents or mount configuration.
+func (d *diskService) RenameStorage(path, name string) error {
+	if _, err := command.ExecuteCommand("e2label", path, name); err != nil {
+		logger.Error("failed to rename storage", zap.Error(err), zap.String("path", path), zap.String("name", name))
 		return err
 	}
 
@@ -372,6 +385,10 @@ func (d *diskService) GetDiskInfo(path string) model.LSBLKModel {
 		blk = blkList[0]
 	}
 	return blk
+}
+
+func (d *diskService) GetFilesystemLabel(path string) string {
+	return command.ExecFilesystemLabel(path)
 }
 
 func (d *diskService) MountDisk(path, mountPoint string) (string, error) {
