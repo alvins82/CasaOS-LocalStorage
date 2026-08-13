@@ -16,7 +16,6 @@ import (
 	"time"
 
 	"github.com/IceWhaleTech/CasaOS-Common/model"
-	"github.com/IceWhaleTech/CasaOS-Common/utils/file"
 	util_http "github.com/IceWhaleTech/CasaOS-Common/utils/http"
 	"github.com/IceWhaleTech/CasaOS-Common/utils/logger"
 	"github.com/IceWhaleTech/CasaOS-LocalStorage/codegen/message_bus"
@@ -27,6 +26,7 @@ import (
 	"github.com/IceWhaleTech/CasaOS-LocalStorage/pkg/utils/merge"
 	"github.com/IceWhaleTech/CasaOS-LocalStorage/route"
 	"github.com/IceWhaleTech/CasaOS-LocalStorage/service"
+	servicev2 "github.com/IceWhaleTech/CasaOS-LocalStorage/service/v2"
 	"github.com/coreos/go-systemd/daemon"
 	"github.com/robfig/cron/v3"
 	"github.com/samber/lo"
@@ -126,23 +126,24 @@ func checkToken2_11() {
 
 func ensureDefaultDirectories() {
 	sysType := runtime.GOOS
-	var dirArray []string
+	var root string
 	if sysType == "linux" {
-		dirArray = []string{"/DATA/AppData", "/DATA/Documents", "/DATA/Downloads", "/DATA/Gallery", "/DATA/Media/Movies", "/DATA/Media/TV Shows", "/DATA/Media/Music"}
+		root = "/DATA"
 	}
 
 	if sysType == "windows" {
-		dirArray = []string{"C:\\CasaOS\\DATA\\AppData", "C:\\CasaOS\\DATA\\Documents", "C:\\CasaOS\\DATA\\Downloads", "C:\\CasaOS\\DATA\\Gallery", "C:\\CasaOS\\DATA\\Media/Movies", "C:\\CasaOS\\DATA\\Media\\TV Shows", "C:\\CasaOS\\DATA\\Media\\Music"}
+		root = "C:\\CasaOS\\DATA"
 	}
 
 	if sysType == "darwin" {
-		dirArray = []string{"./CasaOS/DATA/AppData", "./CasaOS/DATA/Documents", "./CasaOS/DATA/Downloads", "./CasaOS/DATA/Gallery", "./CasaOS/DATA/Media/Movies", "./CasaOS/DATA/Media/TV Shows", "./CasaOS/DATA/Media/Music"}
+		root = "./CasaOS/DATA"
 	}
 
-	for _, v := range dirArray {
-		if err := file.IsNotExistMkDir(v); err != nil {
-			logger.Error("ensureDefaultDirectories", zap.Error(err))
-		}
+	if root == "" {
+		return
+	}
+	if err := servicev2.EnsureDefaultDirectories(root); err != nil {
+		logger.Error("ensureDefaultDirectories", zap.Error(err))
 	}
 }
 
