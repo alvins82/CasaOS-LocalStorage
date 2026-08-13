@@ -101,6 +101,9 @@ func GetDisksUSBList(ctx echo.Context) error {
 				temp.Name = v.Name
 			}
 			temp.Size = v.Size
+			stats := service.MountedFilesystemStats(v)
+			temp.Avail = stats.Avail
+			temp.Used = stats.Used
 			children := []model1.USBChildren{}
 			for _, child := range v.Children {
 				if len(child.MountPoint) > 0 {
@@ -108,13 +111,12 @@ func GetDisksUSBList(ctx echo.Context) error {
 					tempChildren.MountPoint = child.MountPoint
 					tempChildren.Size, _ = strconv.ParseUint(child.FSSize.String(), 10, 64)
 					tempChildren.Avail, _ = strconv.ParseUint(child.FSAvail.String(), 10, 64)
+					tempChildren.Used, _ = strconv.ParseUint(child.FSUsed.String(), 10, 64)
 					tempChildren.Name = child.Label
 					if len(tempChildren.Name) == 0 {
 						tempChildren.Name = filepath.Base(child.MountPoint)
 					}
-					avail, _ := strconv.ParseUint(child.FSAvail.String(), 10, 64)
 					children = append(children, tempChildren)
-					temp.Avail += avail
 				}
 			}
 
