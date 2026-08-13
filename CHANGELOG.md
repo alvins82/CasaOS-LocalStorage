@@ -2,6 +2,22 @@
 
 All notable changes to CasaOS LocalStorage are documented here.
 
+## [0.4.23] - 2026-08-13
+
+### Added
+
+- Add a protected `PUT /v1/storage/rename` endpoint for ext2/ext3/ext4 volumes and keep system storage protected from renaming ([CasaOS-LocalStorage #6](https://github.com/alvins82/CasaOS-LocalStorage/pull/6)).
+
+### Fixed
+
+- Read the filesystem label directly with `blkid` when `lsblk` has not refreshed udev data yet, so a successful rename is reflected immediately in Storage Manager ([CasaOS-LocalStorage #6](https://github.com/alvins82/CasaOS-LocalStorage/pull/6)).
+
+### Verification
+
+- `go generate ./...`
+- `GOOS=linux GOARCH=amd64 CGO_ENABLED=0 go build ./...`
+- Invalid-device API validation probe completed successfully.
+
 ## [0.4.22] - 2026-08-13
 
 ### Changed
