@@ -2,6 +2,21 @@
 
 All notable changes to CasaOS LocalStorage are documented here.
 
+## [0.4.24] - 2026-08-13
+
+### Added
+
+- Create the standard `Documents`, `Downloads`, `Gallery`, and `Media` directories in `/DATA` when an external merged storage is created and they are missing ([CasaOS-LocalStorage #7](https://github.com/alvins82/CasaOS-LocalStorage/pull/7)).
+
+### Changed
+
+- Reuse the default-directory helper during startup and merged-storage recovery while preserving the special system `AppData` compatibility mount.
+
+### Verification
+
+- Focused default-directory tests pass.
+- Linux cross-compilation succeeds for the service and root package.
+
 ## [0.4.23] - 2026-08-13
 
 ### Added
