@@ -98,12 +98,13 @@ func init() {
 		}
 	}
 
-	if strings.ToLower(config.ServerInfo.EnableMergerFS) == "true" {
-		go service.MyService.LocalStorage().CheckMergeMount()
-	}
+	servicev2.InitializeDataLayout(
+		strings.EqualFold(strings.TrimSpace(config.ServerInfo.EnableMergerFS), "true"),
+		service.MyService.LocalStorage().CheckMergeMount,
+		ensureDefaultDirectories,
+	)
 
 	checkToken2_11()
-	go ensureDefaultDirectories()
 	//service.MyService.Disk().EnsureDefaultMergePoint()
 
 	// service.MountLists = make(map[string]*mountlib.MountPoint)

@@ -4,6 +4,10 @@
 
 Local Storage service provides local storage and disk management functionalities to CasaOS.
 
+## Fork release history
+
+- `v0.4.25` — Restore persisted mergerfs mounts before creating default `/DATA` directories so upgrades and service restarts retain the configured merged storage.
+
 
 
 
