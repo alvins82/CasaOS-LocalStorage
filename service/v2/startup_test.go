@@ -1,8 +1,8 @@
-package main
+package v2
 
 import "testing"
 
-func TestDefaultDirectoriesAreDeferredWhenMergerFSIsEnabled(t *testing.T) {
+func TestInitializeDataLayoutDefersDefaultDirectoriesForMergerFS(t *testing.T) {
 	tests := []struct {
 		name            string
 		mergerFSEnabled bool
@@ -15,17 +15,17 @@ func TestDefaultDirectoriesAreDeferredWhenMergerFSIsEnabled(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			var events []string
-			initializeDataLayout(
+			InitializeDataLayout(
 				tt.mergerFSEnabled,
 				func() { events = append(events, "restore") },
 				func() { events = append(events, "defaults") },
 			)
 			if len(events) != len(tt.want) {
-				t.Fatalf("initializeDataLayout() events = %#v, want %#v", events, tt.want)
+				t.Fatalf("InitializeDataLayout() events = %#v, want %#v", events, tt.want)
 			}
 			for i := range events {
 				if events[i] != tt.want[i] {
-					t.Fatalf("initializeDataLayout() events = %#v, want %#v", events, tt.want)
+					t.Fatalf("InitializeDataLayout() events = %#v, want %#v", events, tt.want)
 				}
 			}
 		})

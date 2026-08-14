@@ -98,7 +98,7 @@ func init() {
 		}
 	}
 
-	initializeDataLayout(
+	servicev2.InitializeDataLayout(
 		strings.EqualFold(strings.TrimSpace(config.ServerInfo.EnableMergerFS), "true"),
 		service.MyService.LocalStorage().CheckMergeMount,
 		ensureDefaultDirectories,
@@ -123,19 +123,6 @@ func checkToken2_11() {
 		service.MyService.USB().UpdateUSBAutoMount("False")
 		service.MyService.USB().ExecUSBAutoMountShell("False")
 	}
-}
-
-func initializeDataLayout(mergerFSEnabled bool, restoreMerge func(), ensureDirectories func()) {
-	// Restore configured mergerfs mounts before creating any default data
-	// directories. The mount point must be empty while CreateMerge runs;
-	// creating directories concurrently here can make a persisted merge
-	// fail to come back after a restart or package upgrade.
-	if mergerFSEnabled {
-		restoreMerge()
-		return
-	}
-
-	ensureDirectories()
 }
 
 func ensureDefaultDirectories() {
