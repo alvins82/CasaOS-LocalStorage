@@ -2,6 +2,17 @@
 
 All notable changes to CasaOS LocalStorage are documented here.
 
+## [0.4.25] - 2026-08-14
+
+### Fixed
+
+- Restore persisted mergerfs mounts before creating default `/DATA` directories, preventing upgrades and service restarts from leaving the configured merged storage unmounted ([CasaOS-LocalStorage #9](https://github.com/alvins82/CasaOS-LocalStorage/pull/9)).
+
+### Verification
+
+- Added a regression test documenting the startup ordering contract.
+- Linux-targeted build and focused tests pass.
+
 ## [0.4.24] - 2026-08-13
 
 ### Added
