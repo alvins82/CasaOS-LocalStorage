@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"strings"
+	"time"
 
 	"github.com/IceWhaleTech/CasaOS-Common/utils"
 	"github.com/IceWhaleTech/CasaOS-Common/utils/file"
@@ -325,6 +326,58 @@ func (s *LocalStorageService) IsMergeMounted(mountPoint string, fstype string) b
 		}
 	}
 	return false
+}
+
+// AreAllMergesMounted reports whether every merge in the database is
+// currently a live mergerfs mount.
+func (s *LocalStorageService) AreAllMergesMounted() bool {
+	s._mergeMu.Lock()
+	defer s._mergeMu.Unlock()
+
+	mergesFromDB, err := s.GetMergeAllFromDB(nil)
+	if err != nil {
+		logger.Error("failed to get merge list from database", zap.Error(err))
+		return false
+	}
+
+	mounts, err := s.GetMounts(codegen.GetMountsParams{})
+	if err != nil {
+		logger.Error("failed to get mount list from system", zap.Error(err))
+		return false
+	}
+
+	for i := range mergesFromDB {
+		mounted := false
+		for _, mount := range mounts {
+			if mount.MountPoint == mergesFromDB[i].MountPoint &&
+				mount.Fstype != nil && *mount.Fstype == mergesFromDB[i].FSType {
+				mounted = true
+				break
+			}
+		}
+		if !mounted {
+			return false
+		}
+	}
+
+	return true
+}
+
+// WaitForMerges keeps invoking restore until allMounted reports success or
+// attempts is exhausted, sleeping interval between attempts. It returns true
+// when every merge is mounted.
+func WaitForMerges(restore func(), allMounted func() bool, attempts int, interval time.Duration) bool {
+	for i := 0; i < attempts; i++ {
+		if allMounted() {
+			return true
+		}
+		restore()
+		if allMounted() {
+			return true
+		}
+		time.Sleep(interval)
+	}
+	return allMounted()
 }
 
 func mountPointContents(mountPoint string) string {

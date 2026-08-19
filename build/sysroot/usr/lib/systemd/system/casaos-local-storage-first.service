@@ -1,11 +1,11 @@
 [Unit]
+Description=Restore CasaOS storage layout before containers start
 Before=docker.service
-Description=Hello World
 
 [Service]
-ExecStart=/usr/bin/casaos-local-storage -init
 Type=oneshot
-
+TimeoutStartSec=300
+ExecStart=/usr/bin/casaos-local-storage -init
 
 [Install]
 WantedBy=multi-user.target

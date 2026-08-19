@@ -81,6 +81,20 @@ func init() {
 	service.Cache = cache.Init()
 	if initFlag != nil && *initFlag {
 		service.MyService.Disk().CheckSerialDiskMount()
+		// mount the merges before docker.service starts, so that containers
+		// with restart policies see a ready /DATA on their first start
+		if strings.ToLower(config.ServerInfo.EnableMergerFS) == "true" && merge.IsMergerFSInstalled() {
+			if servicev2.WaitForMerges(
+				service.MyService.LocalStorage().CheckMergeMount,
+				service.MyService.LocalStorage().AreAllMergesMounted,
+				12,
+				5*time.Second,
+			) {
+				logger.Info("all merges are mounted, containers can start safely")
+			} else {
+				logger.Error("not all merges are mounted yet, docker may start before /DATA is ready")
+			}
+		}
 		os.Exit(0)
 		return
 	}
