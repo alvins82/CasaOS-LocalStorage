@@ -162,6 +162,14 @@ func main() {
 		logger.Error("crontab add func error", zap.Error(err))
 	}
 
+	// keep restoring merges that could not come up at boot, e.g. because
+	// their source disks were not mounted yet
+	if strings.ToLower(config.ServerInfo.EnableMergerFS) == "true" {
+		if _, err := crontab.AddFunc("@every 30s", service.MyService.LocalStorage().CheckMergeMount); err != nil {
+			logger.Error("crontab add func error", zap.Error(err))
+		}
+	}
+
 	crontab.Start()
 	defer crontab.Stop()
 

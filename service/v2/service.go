@@ -1,18 +1,23 @@
 package v2
 
 import (
+	"sync"
+
 	"github.com/IceWhaleTech/CasaOS-LocalStorage/service/v2/wrapper"
 	"gorm.io/gorm"
 )
 
 type LocalStorageService struct {
-	_mountinfo wrapper.MountInfoWrapper
-	_db        *gorm.DB
+	_mountinfo   wrapper.MountInfoWrapper
+	_db          *gorm.DB
+	_mergeMu     sync.Mutex
+	_mergeErrors map[string]string
 }
 
 func NewLocalStorageService(db *gorm.DB, mountinfo wrapper.MountInfoWrapper) *LocalStorageService {
 	return &LocalStorageService{
-		_mountinfo: mountinfo,
-		_db:        db,
+		_mountinfo:   mountinfo,
+		_db:          db,
+		_mergeErrors: make(map[string]string),
 	}
 }

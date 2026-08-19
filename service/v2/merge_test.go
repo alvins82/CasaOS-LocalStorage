@@ -1,10 +1,16 @@
 package v2
 
 import (
+	"errors"
+	"os"
+	"path/filepath"
+	"strings"
 	"testing"
 
+	"github.com/IceWhaleTech/CasaOS-Common/utils/logger"
 	"github.com/IceWhaleTech/CasaOS-LocalStorage/pkg/sqlite"
 	model2 "github.com/IceWhaleTech/CasaOS-LocalStorage/service/model"
+	"github.com/moby/sys/mountinfo"
 	"gorm.io/gorm"
 	"gotest.tools/v3/assert"
 )
@@ -15,6 +21,7 @@ var (
 )
 
 func init() {
+	logger.LogInitConsoleOnly()
 	_db = sqlite.GetDBByFile("file::memory:?cache=shared")
 
 	sqlite.Hooks[sqlite.HookAfterDelete] = append(sqlite.Hooks[sqlite.HookAfterDelete], hookAfterDeleteVolume)
@@ -93,4 +100,75 @@ func TestHookAfterDeleteSerialDisk(t *testing.T) {
 
 	actualMerge = actualMerges[0]
 	assert.Equal(t, len(actualMerge.SourceVolumes), 0)
+}
+
+func TestCreateMergeReportsNonEmptyMountPointEntries(t *testing.T) {
+	mountPoint := t.TempDir()
+	basePath := t.TempDir()
+	if err := os.WriteFile(filepath.Join(mountPoint, "leftover.txt"), []byte("leftover"), 0o644); err != nil {
+		t.Fatalf("failed to create leftover file: %v", err)
+	}
+
+	merge := &model2.Merge{
+		MountPoint:     mountPoint,
+		SourceBasePath: &basePath,
+	}
+
+	err := _service.CreateMerge(merge)
+	if !errors.Is(err, ErrMountPointIsNotEmpty) {
+		t.Fatalf("expected ErrMountPointIsNotEmpty, got %v", err)
+	}
+	if !strings.Contains(err.Error(), "leftover.txt") {
+		t.Fatalf("expected the offending entry in the error message, got %q", err)
+	}
+}
+
+func TestMergeRestoreErrorRegistry(t *testing.T) {
+	svc := NewLocalStorageService(nil, nil)
+
+	svc.recordMergeErrorLocked("/DATA", errors.New("mountpoint is not empty: contains: Documents"))
+	if got := svc.LastMergeRestoreError("/DATA"); got != "mountpoint is not empty: contains: Documents" {
+		t.Fatalf("expected recorded restore error, got %q", got)
+	}
+	svc.clearMergeErrorLocked("/DATA")
+	if got := svc.LastMergeRestoreError("/DATA"); got != "" {
+		t.Fatalf("expected cleared restore error, got %q", got)
+	}
+}
+
+type fakeMountInfo struct {
+	mounts []*mountinfo.Info
+}
+
+func (f *fakeMountInfo) GetMounts(filter mountinfo.FilterFunc) ([]*mountinfo.Info, error) {
+	results := make([]*mountinfo.Info, 0)
+	for _, m := range f.mounts {
+		skip, stop := filter(m)
+		if stop {
+			break
+		}
+		if !skip {
+			results = append(results, m)
+		}
+	}
+	return results, nil
+}
+
+func TestIsMergeMounted(t *testing.T) {
+	svc := NewLocalStorageService(nil, &fakeMountInfo{
+		mounts: []*mountinfo.Info{
+			{Mountpoint: "/DATA", FSType: "fuse.mergerfs"},
+			{Mountpoint: "/media/disk1", FSType: "ext4"},
+		},
+	})
+
+	if !svc.IsMergeMounted("/DATA", "fuse.mergerfs") {
+		t.Fatal("expected /DATA to be reported as a mergerfs mount")
+	}
+	if svc.IsMergeMounted("/DATA", "ext4") {
+		t.Fatal("expected /DATA with the wrong fstype to be reported as not mounted")
+	}
+	if svc.IsMergeMounted("/OTHER", "fuse.mergerfs") {
+		t.Fatal("expected an unknown mount point to be reported as not mounted")
+	}
 }
