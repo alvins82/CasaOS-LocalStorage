@@ -6,6 +6,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/IceWhaleTech/CasaOS-Common/utils/logger"
 	"github.com/IceWhaleTech/CasaOS-LocalStorage/pkg/sqlite"
@@ -134,6 +135,71 @@ func TestMergeRestoreErrorRegistry(t *testing.T) {
 	if got := svc.LastMergeRestoreError("/DATA"); got != "" {
 		t.Fatalf("expected cleared restore error, got %q", got)
 	}
+}
+
+func TestAreAllMergesMounted(t *testing.T) {
+	db := sqlite.GetDBByFile("file::memory:mergeall?cache=shared")
+
+	if err := db.Create(&model2.Merge{MountPoint: "/mnt/mergeA", FSType: "fuse.mergerfs"}).Error; err != nil {
+		t.Fatal(err)
+	}
+	if err := db.Create(&model2.Merge{MountPoint: "/mnt/mergeB", FSType: "fuse.mergerfs"}).Error; err != nil {
+		t.Fatal(err)
+	}
+
+	newSvc := func(mounts ...*mountinfo.Info) *LocalStorageService {
+		return NewLocalStorageService(db, &fakeMountInfo{mounts: mounts})
+	}
+
+	if newSvc().AreAllMergesMounted() {
+		t.Fatal("expected no merges to be mounted")
+	}
+	if newSvc(&mountinfo.Info{Mountpoint: "/mnt/mergeA", FSType: "fuse.mergerfs"}).AreAllMergesMounted() {
+		t.Fatal("expected partially mounted merges to be reported as not all mounted")
+	}
+	if !newSvc(
+		&mountinfo.Info{Mountpoint: "/mnt/mergeA", FSType: "fuse.mergerfs"},
+		&mountinfo.Info{Mountpoint: "/mnt/mergeB", FSType: "fuse.mergerfs"},
+		&mountinfo.Info{Mountpoint: "/media/disk1", FSType: "ext4"},
+	).AreAllMergesMounted() {
+		t.Fatal("expected all merges to be mounted")
+	}
+}
+
+func TestWaitForMerges(t *testing.T) {
+	t.Run("already mounted", func(t *testing.T) {
+		restoreCalls := 0
+		ok := WaitForMerges(func() { restoreCalls++ }, func() bool { return true }, 3, time.Millisecond)
+		if !ok {
+			t.Fatal("expected all merges mounted")
+		}
+		if restoreCalls != 0 {
+			t.Fatalf("expected restore not to be called, got %d calls", restoreCalls)
+		}
+	})
+
+	t.Run("mounted by restore", func(t *testing.T) {
+		restoreCalls := 0
+		mounted := false
+		ok := WaitForMerges(func() { restoreCalls++; mounted = true }, func() bool { return mounted }, 3, time.Millisecond)
+		if !ok {
+			t.Fatal("expected all merges mounted")
+		}
+		if restoreCalls != 1 {
+			t.Fatalf("expected 1 restore call, got %d", restoreCalls)
+		}
+	})
+
+	t.Run("never mounted", func(t *testing.T) {
+		restoreCalls := 0
+		ok := WaitForMerges(func() { restoreCalls++ }, func() bool { return false }, 3, time.Millisecond)
+		if ok {
+			t.Fatal("expected merges to remain unmounted")
+		}
+		if restoreCalls != 3 {
+			t.Fatalf("expected 3 restore calls, got %d", restoreCalls)
+		}
+	})
 }
 
 type fakeMountInfo struct {
