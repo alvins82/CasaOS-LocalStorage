@@ -2,6 +2,8 @@ package v2
 
 import (
 	"errors"
+	"fmt"
+	"os"
 	"strings"
 
 	"github.com/IceWhaleTech/CasaOS-Common/utils"
@@ -85,6 +87,12 @@ func (s *LocalStorageService) GetMerges(mountPoint *string) ([]model2.Merge, err
 }
 
 func (s *LocalStorageService) CreateMerge(merge *model2.Merge) error {
+	s._mergeMu.Lock()
+	defer s._mergeMu.Unlock()
+	return s.createMergeLocked(merge)
+}
+
+func (s *LocalStorageService) createMergeLocked(merge *model2.Merge) error {
 	if merge == nil {
 		logger.Error("`merge` should not be nil")
 		return ErrNilReference
@@ -112,8 +120,9 @@ func (s *LocalStorageService) CreateMerge(merge *model2.Merge) error {
 		logger.Error("failed to check if the mount point is empty", zap.Error(err))
 		return err
 	} else if !bool {
-		logger.Error("mount point is not empty", zap.String("mountPoint", merge.MountPoint))
-		return ErrMountPointIsNotEmpty
+		contents := mountPointContents(merge.MountPoint)
+		logger.Error("mount point is not empty", zap.String("mountPoint", merge.MountPoint), zap.String("contents", contents))
+		return fmt.Errorf("%w: %s", ErrMountPointIsNotEmpty, contents)
 	}
 
 	// create a new merge by mounting mergerfs
@@ -152,6 +161,12 @@ func (s *LocalStorageService) CreateMerge(merge *model2.Merge) error {
 }
 
 func (s *LocalStorageService) UpdateMerge(merge *model2.Merge) error {
+	s._mergeMu.Lock()
+	defer s._mergeMu.Unlock()
+	return s.updateMergeLocked(merge)
+}
+
+func (s *LocalStorageService) updateMergeLocked(merge *model2.Merge) error {
 	if merge == nil {
 		logger.Error("`merge` should not be nil")
 		return ErrNilReference
@@ -213,7 +228,12 @@ func (s *LocalStorageService) UpdateMerge(merge *model2.Merge) error {
 	return nil
 }
 
+// CheckMergeMount restores every merge from the database that is not currently
+// mounted. It is safe to call repeatedly (the periodic reconciler in main
+// calls it every 30 seconds) and it is a no-op while all merges are mounted.
 func (s *LocalStorageService) CheckMergeMount() {
+	s._mergeMu.Lock()
+	defer s._mergeMu.Unlock()
 
 	mergesFromDB, err := s.GetMergeAllFromDB(nil)
 	if err != nil {
@@ -228,32 +248,98 @@ func (s *LocalStorageService) CheckMergeMount() {
 	}
 
 	for i := range mergesFromDB {
+		merge := &mergesFromDB[i]
 
 		isMergeExist := false
 
 		// for each merge from database by mount point, check if it already mounted, i.e. a mergerfs mount
 		for _, mount := range mounts {
-			if mount.MountPoint == mergesFromDB[i].MountPoint {
-				if *mount.Fstype == mergesFromDB[i].FSType {
-					logger.Info("merge already exists", zap.Any("merge", mergesFromDB[i]))
+			if mount.MountPoint == merge.MountPoint {
+				if *mount.Fstype == merge.FSType {
 					isMergeExist = true
 					break
 				}
-				logger.Error("not a mergerfs mount point", zap.Any("mount", mount))
+				logger.Error("a non-mergerfs mount occupies the merge mount point", zap.Any("mount", mount))
 			}
 		}
 
 		if isMergeExist {
-			if err := s.UpdateMerge(&mergesFromDB[i]); err != nil {
-				logger.Error("failed to update merge", zap.Error(err), zap.Any("merge", mergesFromDB[i]))
+			if err := s.updateMergeLocked(merge); err != nil {
+				logger.Error("failed to update merge", zap.Error(err), zap.Any("merge", *merge))
+			} else {
+				s.clearMergeErrorLocked(merge.MountPoint)
 			}
 			continue
+		}
+
+		// the merge may have been removed from the database after the list was read
+		freshMerge, err := s.GetFirstMergeFromDB(merge.MountPoint)
+		if err != nil {
+			logger.Error("failed to re-check merge in database", zap.Error(err), zap.Any("merge", *merge))
+			continue
+		}
+		if freshMerge == nil {
+			logger.Info("merge was removed, skipping restore", zap.String("mountPoint", merge.MountPoint))
+			continue
+		}
+
+		if err := s.createMergeLocked(merge); err != nil {
+			logger.Error("failed to restore merge", zap.Error(err), zap.Any("merge", *merge))
+			s.recordMergeErrorLocked(merge.MountPoint, err)
 		} else {
-			if err := s.CreateMerge(&mergesFromDB[i]); err != nil {
-				logger.Error("failed to create merge", zap.Error(err), zap.Any("merge", mergesFromDB[i]))
-			}
+			logger.Info("restored merge mount", zap.String("mountPoint", merge.MountPoint))
+			s.clearMergeErrorLocked(merge.MountPoint)
 		}
 	}
+}
+
+func (s *LocalStorageService) recordMergeErrorLocked(mountPoint string, err error) {
+	s._mergeErrors[mountPoint] = err.Error()
+}
+
+func (s *LocalStorageService) clearMergeErrorLocked(mountPoint string) {
+	delete(s._mergeErrors, mountPoint)
+}
+
+// LastMergeRestoreError returns the most recent restore failure for the given
+// merge mount point, or an empty string when the merge is healthy.
+func (s *LocalStorageService) LastMergeRestoreError(mountPoint string) string {
+	s._mergeMu.Lock()
+	defer s._mergeMu.Unlock()
+	return s._mergeErrors[mountPoint]
+}
+
+// IsMergeMounted reports whether the given mount point is currently a mergerfs
+// mount of the given fstype.
+func (s *LocalStorageService) IsMergeMounted(mountPoint string, fstype string) bool {
+	s._mergeMu.Lock()
+	defer s._mergeMu.Unlock()
+
+	mounts, err := s.GetMounts(codegen.GetMountsParams{MountPoint: &mountPoint})
+	if err != nil {
+		return false
+	}
+	for i := range mounts {
+		if mounts[i].Fstype != nil && *mounts[i].Fstype == fstype {
+			return true
+		}
+	}
+	return false
+}
+
+func mountPointContents(mountPoint string) string {
+	entries, err := os.ReadDir(mountPoint)
+	if err != nil {
+		return "could not list mount point contents"
+	}
+	names := make([]string, 0, len(entries))
+	for _, entry := range entries {
+		names = append(names, entry.Name())
+	}
+	if len(names) == 0 {
+		return "mount point reports as not empty but lists no entries"
+	}
+	return "contains: " + strings.Join(names, ", ")
 }
 
 // filter out any volume that are not mounted based on its UUID and mount point (in reality, could have a different disk mounted on the same path)
