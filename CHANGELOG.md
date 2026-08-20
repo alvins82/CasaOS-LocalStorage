@@ -2,6 +2,39 @@
 
 All notable changes to CasaOS LocalStorage are documented here.
 
+## [0.4.28] - 2026-08-20
+
+### Changed
+
+- No code changes since v0.4.27. Republished from `main` after the boot fixes were merged ([CasaOS-LocalStorage #10](https://github.com/alvins82/CasaOS-LocalStorage/pull/10)) so the release commit is the one actually merged into `main`.
+- Backfilled the CHANGELOG entries for v0.4.26 and v0.4.27, which previously existed only as release notes.
+
+### Verification
+
+- `git diff v0.4.27 v0.4.28` shows only the CHANGELOG.md change; the binary sources are identical.
+
+## [0.4.27] - 2026-08-19
+
+### Fixed
+
+- The before-docker init step (`casaos-local-storage-first`, `casaos-local-storage -init`) now waits until every persisted merged mount is up before reporting done, so `/DATA` is complete before Docker restores containers. This closes the boot window that left user apps exited (127) when branch disks appeared after dockerd.
+
+### Verification
+
+- Linux-targeted build and tests pass.
+- Reboot-verified on real hardware (two reboots with 6+ branch disks): all user apps come back automatically; the storage-first unit exits 0 with all merges mounted before Docker starts.
+
+## [0.4.26] - 2026-08-19
+
+### Fixed
+
+- Merged storage restore keeps retrying until the source disks appear instead of giving up on the first pass, so a slow branch-disk enumeration during boot no longer leaves `/DATA` unmounted. The last restore failure is surfaced in the merge status endpoint.
+
+### Verification
+
+- Linux-targeted build and tests pass.
+- Reboot-verified on real hardware.
+
 ## [0.4.25] - 2026-08-14
 
 ### Fixed
