@@ -223,11 +223,27 @@ func (s *LocalStorage) GetMergeInitStatus(ctx echo.Context) error {
 	}
 
 	// check if /DATA is already a merge point
-	if len(existingMerges) > 0 {
-		status = codegen.Initialized
+	if len(existingMerges) == 0 {
+		return ctx.JSON(http.StatusOK, codegen.GetMergeInitStatusResponseOK{Data: &status})
 	}
-	return ctx.JSON(http.StatusOK, codegen.GetMergeInitStatusResponseOK{Data: &status})
 
+	status = codegen.Initialized
+	if strings.ToLower(config.ServerInfo.EnableMergerFS) == "true" {
+		merge := &existingMerges[0]
+		if !service.MyService.LocalStorage().IsMergeMounted(merge.MountPoint, merge.FSType) {
+			status = codegen.Error
+		}
+	}
+
+	if status != codegen.Initialized {
+		message := service.MyService.LocalStorage().LastMergeRestoreError(mountPoint)
+		if len(message) == 0 {
+			message = "merge is configured but not mounted; the most recent restore failed or has not run yet"
+		}
+		return ctx.JSON(http.StatusOK, codegen.GetMergeInitStatusResponseOK{Data: &status, Message: &message})
+	}
+
+	return ctx.JSON(http.StatusOK, codegen.GetMergeInitStatusResponseOK{Data: &status})
 }
 func (s *LocalStorage) InitMerge(ctx echo.Context) error {
 	var m codegen.MountPoint
